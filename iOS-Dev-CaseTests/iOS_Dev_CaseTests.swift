@@ -6,31 +6,153 @@
 //
 
 import XCTest
+import Combine
 @testable import iOS_Dev_Case
 
-final class iOS_Dev_CaseTests: XCTestCase {
+final class UsersAPITests: XCTestCase {
+    private var usersAPI: UsersAPI!
+    private var cancellables: Set<AnyCancellable> = []
 
-    override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
+    override func setUp() {
+        super.setUp()
+        usersAPI = UsersAPI()
     }
 
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
+    override func tearDown() {
+        usersAPI = nil
+        cancellables.removeAll()
+        super.tearDown()
     }
 
-    func testExample() throws {
-        // This is an example of a functional test case.
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // Any test you write for XCTest can be annotated as throws and async.
-        // Mark your test throws to produce an unexpected failure when your test encounters an uncaught error.
-        // Mark your test async to allow awaiting for asynchronous code to complete. Check the results with assertions afterwards.
-    }
+    func testFetchUsersSuccess() {
 
-    func testPerformanceExample() throws {
-        // This is an example of a performance test case.
-        self.measure {
-            // Put the code you want to measure the time of here.
+        let expectation = XCTestExpectation(description: "Fetch users successfully")
+
+
+        usersAPI.fetchUsers { result in
+            // Assert
+            switch result {
+            case .success(let users):
+                XCTAssertFalse(users.isEmpty, "Users array should not be empty")
+                expectation.fulfill()
+            case .failure(let error):
+                XCTFail("Fetching users failed with error: \(error)")
+            }
         }
+
+        wait(for: [expectation], timeout: 10.0)
     }
 
+    func testFetchUsersFailureWithInvalidURL() {
+
+        let expectation = XCTestExpectation(description: "Fetch users with invalid URL")
+        let invalidURL = URL(string: "https://invalid.url")!
+        let mockAPI = MockUsersAPI(url: invalidURL)
+
+
+        mockAPI.fetchUsers { result in
+            // Assert
+            switch result {
+            case .success:
+                XCTFail("Fetching users should fail with invalid URL")
+            case .failure(let error):
+                XCTAssertEqual(error, .invalidURL, "Error should be invalidURL")
+                expectation.fulfill()
+            }
+        }
+
+        wait(for: [expectation], timeout: 10.0)
+    }
+
+    func testFetchUsersFailureWithDecodeError() {
+
+        let expectation = XCTestExpectation(description: "Fetch users with decode error")
+        let invalidDataURL = URL(string: "https://jsonplaceholder.typicode.com/invalid")!
+        let mockAPI = MockUsersAPI(url: invalidDataURL)
+
+
+        mockAPI.fetchUsers { result in
+            // Assert
+            switch result {
+            case .success:
+                XCTFail("Fetching users should fail with decode error")
+            case .failure(let error):
+                XCTAssertEqual(error, .decodeError, "Error should be decodeError")
+                expectation.fulfill()
+            }
+        }
+
+        wait(for: [expectation], timeout: 10.0)
+    }
+}
+
+// MARK: - Mock UsersAPI for Testing
+final class MockUsersAPI: APIService {
+    private let url: URL
+
+    init(url: URL) {
+        self.url = url
+    }
+
+    func fetchUsers(completion: @escaping (Result<UserModel, APIError>) -> ()) {
+        // Simulate invalid URL
+        if url.absoluteString == "https://invalid.url" {
+            completion(.failure(.invalidURL))
+            return
+        }
+
+        // Simulate decode error
+        if url.absoluteString == "https://jsonplaceholder.typicode.com/invalid" {
+            // invalid JSON data
+            let invalidData = """
+            {
+                "invalidProperty": "This is invalid data"
+            }
+            """.data(using: .utf8)!
+            do {
+                // decode user model
+                _ = try JSONDecoder().decode(UserModel.self, from: invalidData)
+                completion(.failure(.failed))
+            } catch {
+                // decode error
+                completion(.failure(.decodeError))
+            }
+            return
+        }
+
+        // normal api request for other errors
+        let task = URLSession.shared.dataTask(with: url) { (data, response, error) in
+            guard error == nil else {
+                completion(.failure(.networkError))
+                return
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(.failed))
+                return
+            }
+
+            switch httpResponse.statusCode {
+            case 200...299:
+                if let data = data {
+                    do {
+                        let output = try JSONDecoder().decode(UserModel.self, from: data)
+                        completion(.success(output))
+                    } catch {
+                        completion(.failure(.decodeError))
+                    }
+                } else {
+                    completion(.failure(.failed))
+                }
+            default:
+                completion(.failure(.notFound))
+            }
+        }
+        task.resume()
+    }
+}
+
+// MARK: - Invalid Model for Testing
+struct InvalidModel: Decodable {
+    let invalidProperty: String
 }
